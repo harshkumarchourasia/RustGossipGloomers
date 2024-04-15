@@ -1,5 +1,5 @@
 [package]
-name = "single_node_broadcast"
+name = "rust_gosssip_gloomers"
 version = "0.1.0"
 edition = "2021"
 
