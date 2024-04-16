@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::io;
-use std::io::{StdoutLock, Write};
+use std::io::{stderr, StdoutLock, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -34,7 +34,7 @@ enum Payload {
     AddOk,
     Read,
     ReadOk { value: usize },
-    BroadCast { payload: HashMap<String, usize> },
+    BroadCast { log: HashMap<String, usize> },
 }
 
 #[derive(Deserialize)]
@@ -50,6 +50,7 @@ struct init_ok {}
 
 #[derive(Debug)]
 struct Node {
+    msg_id: usize,
     sum: usize,
     log: HashMap<String, usize>,
     node_id: String,
@@ -61,6 +62,7 @@ impl Node {
         match input.body.payload {
             Payload::Add { delta } => {
                 self.log.insert(Uuid::new_v4().to_string(), delta);
+                eprintln!("LOG UPDATED: {:?}", self.log);
                 self.sum += delta;
                 let response = Message {
                     src: input.dest,
@@ -73,6 +75,7 @@ impl Node {
                 };
                 serde_json::to_writer(&mut *output, &response)?;
                 output.write_all(b"\n")?;
+
             }
             Payload::AddOk => {
                 panic!("This code should be unreachable")
@@ -93,29 +96,35 @@ impl Node {
             Payload::ReadOk { .. } => {
                 panic!("This code should be unreachable")
             }
-            Payload::BroadCast { payload } => {
-
+            Payload::BroadCast { log } => {
+                eprintln!("LOG RECEIVED: {:?}", log);
+                for (key, value) in log{
+                    if !self.log.contains_key(&key) {
+                        self.log.insert(key, value);
+                        self.sum += value;
+                    }
+                }
             }
         }
         Ok(())
     }
 
-    fn broadcast(&self, output: &mut StdoutLock) {
+    fn broadcast(&mut self, output: &mut StdoutLock) {
         for node in &self.node_ids {
-            if node == &self.node_id {
-                continue;
-            } else {
+            if node != &self.node_id {
+                eprintln!("LOG SEND: {:?}",self.log);
                 let broadcast_message = Message {
                     src: self.node_id.clone(),
                     dest: node.to_string(),
                     body: Body {
-                        payload: &self.log,
+                        payload: Payload::BroadCast { log: self.log.clone() },
                         in_reply_to: None,
-                        msg_id: None,
+                        msg_id: Some(self.msg_id),
                     },
                 };
-                serde_json::to_writer(&mut *output, &broadcast_message)?;
-                output.write_all(b"\n")?;
+                self.msg_id += 1;
+                serde_json::to_writer(&mut *output, &broadcast_message).unwrap();
+                output.write_all(b"\n").unwrap();
             }
         }
     }
@@ -129,6 +138,7 @@ fn main() -> anyhow::Result<()> {
         .expect("Failed to read string");
     let init: Message<Init> = serde_json::from_str(&buffer).expect("Failed to parse INIT message");
     let node = Arc::new(Mutex::new(Node {
+        msg_id: 0,
         sum: 0,
         log: HashMap::new(),
         node_id: init.body.payload.node_id,
@@ -144,8 +154,10 @@ fn main() -> anyhow::Result<()> {
         },
     };
     serde_json::to_writer(io::stdout(), &reply).context("Can not serialize")?;
+    io::stdout().write_all(b"\n");
 
     let node_1 = Arc::clone(&node);
+    // let node_2 = Arc::clone(&node_1);
     let handle_client = thread::spawn(move || {
         let stdin = std::io::stdin().lock();
         let inputs = serde_json::Deserializer::from_reader(stdin).into_iter::<Message<Payload>>();
@@ -154,19 +166,22 @@ fn main() -> anyhow::Result<()> {
             let input = input
                 .context("can not deserialize the input message")
                 .unwrap();
-            node_1.lock().unwrap().step(input, &mut stdout).unwrap();
+           let x =  node.lock().unwrap();
+            node.lock().unwrap().step(input, &mut stdout).unwrap();
+            thread::sleep(Duration::from_millis(1));
         }
     });
 
-    let node_2 = Arc::clone(&node);
+
     let do_broadcast = thread::spawn(move || loop {
+        eprintln!("do_broadcast LOG: {:?}", node_1.lock().unwrap().log);
         let mut stdout = std::io::stdout().lock();
-        thread::sleep(Duration::from_millis(200));
-        node_2.lock().unwrap().broadcast(&mut stdout);
+        node_1.lock().unwrap().broadcast(&mut stdout);
+        thread::sleep(Duration::from_millis(100));
     });
 
-    handle_client.join().unwrap();
     do_broadcast.join().unwrap();
+    handle_client.join().unwrap();
 
     Ok(())
 }
