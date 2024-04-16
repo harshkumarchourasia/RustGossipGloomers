@@ -3,10 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::io;
-use std::io::{stderr, StdoutLock, Write};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::io::{StdoutLock, Write};
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -95,7 +92,6 @@ impl Node {
                 panic!("This code should be unreachable")
             }
             Payload::BroadCast { log } => {
-                eprintln!("LOG RECEIVED: {:?}", log);
                 for (key, value) in log {
                     if !self.log.contains_key(&key) {
                         self.log.insert(key, value);
@@ -110,7 +106,6 @@ impl Node {
     fn broadcast(&mut self, output: &mut StdoutLock) {
         for node in &self.node_ids {
             if node != &self.node_id {
-                eprintln!("LOG SEND: {:?}", self.log);
                 let broadcast_message = Message {
                     src: self.node_id.clone(),
                     dest: node.to_string(),
@@ -137,13 +132,13 @@ fn main() -> anyhow::Result<()> {
         .read_line(&mut buffer)
         .expect("Failed to read string");
     let init: Message<Init> = serde_json::from_str(&buffer).expect("Failed to parse INIT message");
-    let node = Arc::new(Mutex::new(Node {
+    let mut node = Node {
         msg_id: 0,
         sum: 0,
         log: HashMap::new(),
         node_id: init.body.payload.node_id,
         node_ids: init.body.payload.node_ids,
-    }));
+    };
     let reply = Message {
         src: init.dest,
         dest: init.src,
@@ -156,23 +151,15 @@ fn main() -> anyhow::Result<()> {
     serde_json::to_writer(io::stdout(), &reply).context("Can not serialize")?;
     io::stdout().write_all(b"\n");
 
-    let _node = Arc::clone(&node);
-    let handle_client = thread::spawn(move || {
-        let stdin = std::io::stdin().lock();
-        let inputs = serde_json::Deserializer::from_reader(stdin).into_iter::<Message<Payload>>();
-        let mut stdout = std::io::stdout().lock();
-        for input in inputs {
-            let input = input
-                .context("can not deserialize the input message")
-                .unwrap();
-            _node.lock().unwrap().step(input, &mut stdout).unwrap();
-            _node.lock().unwrap().broadcast(&mut stdout);
-            thread::sleep(Duration::from_millis(1));
-        }
-    });
-
-    let _node = Arc::clone(&node);
-    handle_client.join().unwrap();
-
+    let stdin = std::io::stdin().lock();
+    let inputs = serde_json::Deserializer::from_reader(stdin).into_iter::<Message<Payload>>();
+    let mut stdout = std::io::stdout().lock();
+    for input in inputs {
+        let input = input
+            .context("can not deserialize the input message")
+            .unwrap();
+        node.step(input, &mut stdout).unwrap();
+        node.broadcast(&mut stdout);
+    }
     Ok(())
 }
