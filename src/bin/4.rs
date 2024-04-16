@@ -62,7 +62,6 @@ impl Node {
         match input.body.payload {
             Payload::Add { delta } => {
                 self.log.insert(Uuid::new_v4().to_string(), delta);
-                eprintln!("LOG UPDATED: {:?}", self.log);
                 self.sum += delta;
                 let response = Message {
                     src: input.dest,
@@ -166,18 +165,12 @@ fn main() -> anyhow::Result<()> {
                 .context("can not deserialize the input message")
                 .unwrap();
             _node.lock().unwrap().step(input, &mut stdout).unwrap();
+            _node.lock().unwrap().broadcast(&mut stdout);
             thread::sleep(Duration::from_millis(1));
         }
     });
 
     let _node = Arc::clone(&node);
-    let do_broadcast = thread::spawn(move || loop {
-        let mut stdout = std::io::stdout().lock();
-        _node.lock().unwrap().broadcast(&mut stdout);
-        thread::sleep(Duration::from_millis(100));
-    });
-
-    do_broadcast.join().unwrap();
     handle_client.join().unwrap();
 
     Ok(())
