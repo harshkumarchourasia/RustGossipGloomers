@@ -156,8 +156,7 @@ fn main() -> anyhow::Result<()> {
     serde_json::to_writer(io::stdout(), &reply).context("Can not serialize")?;
     io::stdout().write_all(b"\n");
 
-    let node_1 = Arc::clone(&node);
-    // let node_2 = Arc::clone(&node_1);
+    let _node = Arc::clone(&node);
     let handle_client = thread::spawn(move || {
         let stdin = std::io::stdin().lock();
         let inputs = serde_json::Deserializer::from_reader(stdin).into_iter::<Message<Payload>>();
@@ -166,17 +165,15 @@ fn main() -> anyhow::Result<()> {
             let input = input
                 .context("can not deserialize the input message")
                 .unwrap();
-           let x =  node.lock().unwrap();
-            node.lock().unwrap().step(input, &mut stdout).unwrap();
+            _node.lock().unwrap().step(input, &mut stdout).unwrap();
             thread::sleep(Duration::from_millis(1));
         }
     });
 
-
+    let _node = Arc::clone(&node);
     let do_broadcast = thread::spawn(move || loop {
-        eprintln!("do_broadcast LOG: {:?}", node_1.lock().unwrap().log);
         let mut stdout = std::io::stdout().lock();
-        node_1.lock().unwrap().broadcast(&mut stdout);
+        _node.lock().unwrap().broadcast(&mut stdout);
         thread::sleep(Duration::from_millis(100));
     });
 
