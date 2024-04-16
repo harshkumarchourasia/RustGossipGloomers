@@ -56,7 +56,8 @@ impl UniqueIdNode {
     pub fn generate(&mut self, input: Message, output: &mut StdoutLock) -> anyhow::Result<()> {
         match input.body.payload {
             Payload::Generate => {
-                let id = self.counter * self.node_ids.as_ref().unwrap().iter().len() + self.delta.unwrap();
+                let id = self.counter * self.node_ids.as_ref().unwrap().iter().len()
+                    + self.delta.unwrap();
                 self.counter += 1;
                 let response = Message {
                     src: input.dest,

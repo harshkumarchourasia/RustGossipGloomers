@@ -74,7 +74,6 @@ impl Node {
                 };
                 serde_json::to_writer(&mut *output, &response)?;
                 output.write_all(b"\n")?;
-
             }
             Payload::AddOk => {
                 panic!("This code should be unreachable")
@@ -97,7 +96,7 @@ impl Node {
             }
             Payload::BroadCast { log } => {
                 eprintln!("LOG RECEIVED: {:?}", log);
-                for (key, value) in log{
+                for (key, value) in log {
                     if !self.log.contains_key(&key) {
                         self.log.insert(key, value);
                         self.sum += value;
@@ -111,12 +110,14 @@ impl Node {
     fn broadcast(&mut self, output: &mut StdoutLock) {
         for node in &self.node_ids {
             if node != &self.node_id {
-                eprintln!("LOG SEND: {:?}",self.log);
+                eprintln!("LOG SEND: {:?}", self.log);
                 let broadcast_message = Message {
                     src: self.node_id.clone(),
                     dest: node.to_string(),
                     body: Body {
-                        payload: Payload::BroadCast { log: self.log.clone() },
+                        payload: Payload::BroadCast {
+                            log: self.log.clone(),
+                        },
                         in_reply_to: None,
                         msg_id: Some(self.msg_id),
                     },

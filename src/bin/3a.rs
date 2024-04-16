@@ -67,7 +67,7 @@ impl SingleBroadCaseNode {
                     body: Body {
                         payload: Payload::BroadcastOk,
                         msg_id: None,
-                        in_reply_to: input.body.msg_id ,
+                        in_reply_to: input.body.msg_id,
                     },
                 };
 
