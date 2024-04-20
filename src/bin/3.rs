@@ -1,14 +1,23 @@
 use std::io::{stdin, stdout};
-use std::{collections::HashMap, io::Write};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use std::{collections::HashMap, io::Write, thread};
 
 use crate::Payload::ReadOk;
 use anyhow::{self, Context};
 use rust_gosssip_gloomers::*;
 use serde::{Deserialize, Serialize};
 use serde_json;
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+
+fn respond<P>(message: Message<P>)
+where
+    P: Serialize,
+{
+    serde_json::to_writer(stdout().lock(), &message)
+        .context("Can not serialize")
+        .unwrap();
+    stdout().lock().write_all(b"\n").unwrap();
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
@@ -28,16 +37,18 @@ enum Payload {
     TopologyOk,
     Propagate {
         messages: Vec<usize>,
+        end_idx: usize,
     },
     PropagateOk {
-        message_size: usize,
+        end_idx: usize,
     },
 }
 
 #[derive(Debug)]
 struct Node {
     messages: Vec<usize>,
-    node_to_idx: HashMap<String, usize>,
+    to_propagate: Vec<usize>,
+    counter: HashMap<String, usize>,
     node_id: String,
     node_ids: Vec<String>,
     topology: Option<HashMap<String, Vec<String>>>,
@@ -49,7 +60,8 @@ impl Node {
         match input.body.payload {
             Payload::Broadcast { message } => {
                 self.messages.push(message);
-                let response = Message {
+                self.to_propagate.push(message);
+                respond(Message {
                     src: input.dest,
                     dest: input.src,
                     body: Body {
@@ -57,18 +69,13 @@ impl Node {
                         in_reply_to: input.body.msg_id,
                         msg_id: None,
                     },
-                };
-                serde_json::to_writer(stdout().lock(), &response)
-                    .context("Can not serialize")
-                    .unwrap();
-                stdout().write_all(b"\n").unwrap();
-                self.propagate().unwrap();
+                });
             }
             Payload::BroadcastOk => {
                 panic!("input type can not be broadcast_ok")
             }
             Payload::Read => {
-                let response = Message {
+                respond(Message {
                     src: input.dest,
                     dest: input.src,
                     body: Body {
@@ -78,11 +85,7 @@ impl Node {
                         in_reply_to: input.body.msg_id,
                         msg_id: None,
                     },
-                };
-                serde_json::to_writer(stdout().lock(), &response)
-                    .context("Can not serialize")
-                    .unwrap();
-                stdout().write_all(b"\n").unwrap();
+                });
             }
             Payload::ReadOk { .. } => {
                 panic!("input type can not be read_ok")
@@ -91,11 +94,11 @@ impl Node {
                 self.topology = Some(topology);
                 for node in &self.node_ids {
                     if *node != self.node_id {
-                        self.node_to_idx.insert(node.to_string(), 0);
+                        self.counter.insert(node.to_string(), 0);
                     }
                 }
 
-                let response = Message {
+                respond(Message {
                     src: input.dest,
                     dest: input.src,
                     body: Body {
@@ -103,37 +106,26 @@ impl Node {
                         in_reply_to: input.body.msg_id,
                         msg_id: None,
                     },
-                };
-                serde_json::to_writer(stdout().lock(), &response)
-                    .context("Can not serialize")
-                    .unwrap();
-                stdout().write_all(b"\n").unwrap();
+                });
             }
 
             Payload::TopologyOk => {
                 panic!("input type can not be topology_ok")
             }
-            Payload::Propagate { messages } => {
-                let response = Message {
+            Payload::Propagate { messages, end_idx } => {
+                self.messages.extend(messages);
+                respond(Message {
                     src: input.dest,
                     dest: input.src,
                     body: Body {
-                        payload: Payload::PropagateOk {
-                            message_size: messages.len(),
-                        },
+                        payload: Payload::PropagateOk { end_idx },
                         in_reply_to: input.body.msg_id,
                         msg_id: None,
                     },
-                };
-                self.messages.extend(messages);
-                serde_json::to_writer(stdout().lock(), &response)
-                    .context("Can not serialize")
-                    .unwrap();
-                stdout().write_all(b"\n").unwrap();
+                });
             }
-            Payload::PropagateOk { message_size } => {
-                let prev = self.node_to_idx.get(&input.src).unwrap();
-                self.node_to_idx.insert(input.src, prev + message_size);
+            Payload::PropagateOk { end_idx } => {
+                self.counter.insert(input.src, end_idx);
             }
         }
     }
@@ -142,23 +134,20 @@ impl Node {
         if self.messages.len() == 0 {
             return Ok(());
         }
-        for (node, &idx) in &self.node_to_idx {
-            if idx < self.messages.len() {
-                let message = Message {
+        for (node, &idx) in &self.counter {
+            if idx < self.to_propagate.len() {
+                respond(Message {
                     src: self.node_id.to_string(),
                     dest: node.to_string(),
                     body: Body {
                         payload: Payload::Propagate {
-                            messages: self.messages[idx..].to_owned(),
+                            messages: self.to_propagate[idx..].to_owned(),
+                            end_idx: self.to_propagate.len(),
                         },
                         msg_id: Some(self.id),
                         in_reply_to: None,
                     },
-                };
-                serde_json::to_writer(stdout().lock(), &message)
-                    .context("Can not serialize")
-                    .unwrap();
-                stdout().write_all(b"\n").unwrap();
+                });
                 self.id += 1;
             }
         }
@@ -168,24 +157,23 @@ impl Node {
 }
 
 fn main() -> anyhow::Result<()> {
-    /////
-    // Initialize the node
-
     let mut buffer = String::new();
     stdin()
         .read_line(&mut buffer)
-        .expect("Failed to read buffer");
+        .expect("Failed to read buffer for init message");
     let init_request: Message<Init> =
-        serde_json::from_str(&buffer).expect("Failed to parse init message");
+        serde_json::from_str(&buffer).expect("Failed to serialize init message");
+
     let node = Arc::new(Mutex::new(Node {
         messages: vec![],
-        node_to_idx: HashMap::new(),
+        to_propagate: vec![],
+        counter: HashMap::new(),
         node_id: init_request.body.payload.node_id,
         node_ids: init_request.body.payload.node_ids,
         topology: None,
         id: 0,
     }));
-    let reply = Message {
+    respond(Message {
         src: init_request.dest,
         dest: init_request.src,
         body: Body {
@@ -193,29 +181,22 @@ fn main() -> anyhow::Result<()> {
             payload: init_ok {},
             msg_id: None,
         },
-    };
-    serde_json::to_writer(stdout(), &reply).context("Can not serialize")?;
-    stdout().write_all(b"\n")?;
+    });
 
-    ////////
+    let node_copy = node.clone();
 
     let th1 = thread::spawn(move || loop {
         let mut x = serde_json::Deserializer::from_reader(stdin().lock());
         let input: Message<Payload> = Message::deserialize(&mut x).unwrap();
         node.lock().unwrap().step(input);
+        thread::sleep(Duration::from_millis(1));
     });
 
-    /*
-    let th2 = thread::spawn(move || {
-        loop{
-            thread::sleep(Duration::from_secs(1));
-            stdout().write_all(b"this is cron").unwrap();
-            stdout().write_all(b"\n").unwrap();
-        }
-
+    let th2 = thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(300));
+        node_copy.lock().unwrap().propagate().unwrap();
     });
     th2.join().unwrap();
-     */
     th1.join().unwrap();
 
     Ok(())
