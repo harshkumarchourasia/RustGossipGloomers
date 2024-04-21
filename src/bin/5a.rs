@@ -37,8 +37,8 @@ impl Node {
     fn step(&mut self, input: Message<Payload>) -> Message<Payload>{
         match input.body.payload {
             Payload::Send { key, msg } => {
-                self.log.entry(key.clone()).or_insert_with(||vec![Msg{value: msg, offset: 0}]);
-                let offset = self.log.get(&key).unwrap().len()-1;
+                let offset = self.log.get(&key).or(Some(&vec![])).unwrap().len();
+                self.log.entry(key.clone()).or_insert_with(||vec![]).push(Msg {value: msg, offset });
                 self.committed_offset.entry(key).or_insert(0);
 
                 Message{
@@ -60,7 +60,7 @@ impl Node {
                     let key_msgs = self.log.get(&key).map_or_else(Vec::new, |log| {
                         log.iter()
                             .skip(offset)
-                            .map(|msg| vec![msg.value, msg.offset])
+                            .map(|msg| vec![msg.offset, msg.value])
                             .collect()
                     });
                     msgs.insert(key, key_msgs);
