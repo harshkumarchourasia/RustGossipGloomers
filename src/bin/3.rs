@@ -1,23 +1,13 @@
-use std::io::{stdin, stdout};
+use std::io::stdin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::{collections::HashMap, io::Write, thread};
+use std::{collections::HashMap, thread};
 
 use crate::Payload::ReadOk;
-use anyhow::{self, Context};
+use anyhow::{self};
 use rust_gosssip_gloomers::*;
 use serde::{Deserialize, Serialize};
 use serde_json;
-
-fn respond<P>(message: Message<P>)
-where
-    P: Serialize,
-{
-    serde_json::to_writer(stdout().lock(), &message)
-        .context("Can not serialize")
-        .unwrap();
-    stdout().lock().write_all(b"\n").unwrap();
-}
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
