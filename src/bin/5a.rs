@@ -34,14 +34,28 @@ enum Payload {
 }
 
 impl Node {
-    fn step(&mut self, input: Message<Payload>) -> Message<Payload>{
+
+    fn add_new_log_msg(&mut self, key: String, msg: usize) -> usize{
+        let offset = self.log.get(&key).or(Some(&vec![])).unwrap().len();
+        self.log
+            .entry(key.clone())
+            .or_insert_with(|| vec![])
+            .push(Msg { value: msg, offset });
+        self.committed_offset.entry(key).or_insert(0);
+        offset
+    }
+
+    fn commit_offset(&mut self, offsets: HashMap<String, usize>){
+        offsets.into_iter().for_each(|(k, v)| {
+            self.committed_offset.insert(k, v);
+        });
+    }
+
+    fn step(&mut self, input: Message<Payload>) -> Message<Payload> {
         match input.body.payload {
             Payload::Send { key, msg } => {
-                let offset = self.log.get(&key).or(Some(&vec![])).unwrap().len();
-                self.log.entry(key.clone()).or_insert_with(||vec![]).push(Msg {value: msg, offset });
-                self.committed_offset.entry(key).or_insert(0);
-
-                Message{
+                let offset = self.add_new_log_msg(key, msg);
+                Message {
                     src: input.dest,
                     dest: input.src,
                     body: Body {
@@ -79,40 +93,36 @@ impl Node {
                 unreachable!();
             }
             Payload::CommitOffsets { offsets } => {
-                offsets.into_iter().for_each(|(k,v)| {
-                    self.committed_offset.insert(k, v);
-                });
+                self.commit_offset(offsets);
                 Message {
                     src: input.dest,
                     dest: input.src,
                     body: Body {
                         payload: Payload::CommitOffsetsOk,
                         msg_id: None,
-                        in_reply_to: input.body.msg_id
-                    }
+                        in_reply_to: input.body.msg_id,
+                    },
                 }
             }
             Payload::CommitOffsetsOk => {
                 unreachable!();
             }
             Payload::ListCommittedOffsets { keys } => {
-                let offsets = self.committed_offset
+                let offsets = self
+                    .committed_offset
                     .iter()
-                    .filter(|(key, _)| {
-                        keys.contains(&key)
-                    })
+                    .filter(|(key, _)| keys.contains(&key))
                     .map(|(key, value)| (key.clone(), *value))
                     .collect();
                 Message {
                     src: input.dest,
                     dest: input.src,
                     body: Body {
-                        payload: Payload::ListCommittedOffsetsOk {offsets},
+                        payload: Payload::ListCommittedOffsetsOk { offsets },
                         in_reply_to: input.body.msg_id,
-                        msg_id: None
-                    }
+                        msg_id: None,
+                    },
                 }
-
             }
             Payload::ListCommittedOffsetsOk { .. } => {
                 unreachable!();
@@ -121,9 +131,9 @@ impl Node {
     }
 }
 
-struct Msg{
+struct Msg {
     value: usize,
-    offset: usize
+    offset: usize,
 }
 
 struct Node {
@@ -153,7 +163,9 @@ fn main() {
             msg_id: None,
         },
     };
-    serde_json::to_writer(stdout(), &reply).context("Can not serialize").unwrap();
+    serde_json::to_writer(stdout(), &reply)
+        .context("Can not serialize")
+        .unwrap();
     stdout().write_all(b"\n").unwrap();
 
     let inputs =
